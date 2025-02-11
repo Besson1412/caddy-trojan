@@ -4,6 +4,7 @@ on:
   # 每当有新的 commit push 到 main 分支时触发工作流
   push:
     branches: ["main"]
+    workflow_dispatch:  # 允许手动触发
 
 jobs:
   build-and-push:
