@@ -11,6 +11,7 @@ COPY docker_entrypoint.sh /docker_entrypoint.sh
 RUN chmod +x /docker_entrypoint.sh \
     && caddy add-package github.com/imgk/caddy-trojan \
 # 下载 web.tar.gz 并解压到 /www/web 目录
+    && mkdir -p /www/web \
     && wget -O web.tar.gz https://raw.githubusercontent.com/Besson1412/caddy-trojan/main/basic/web.tar.gz \
     && tar xzf web.tar.gz -C /www/web \
     && rm -f web.tar.gz
