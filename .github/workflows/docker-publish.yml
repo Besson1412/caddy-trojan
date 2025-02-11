@@ -1,0 +1,57 @@
+name: Build and Push to Docker Hub
+
+on:
+  # 每当有新的 commit push 到 main 分支时触发工作流
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      # 2. 登录 Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # 3. 准备 QEMU，以便在 x86_64 环境模拟并构建其他架构 (arm64)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # 4. 设置 Buildx，用于多平台构建
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 5. 生成动态版本号（示例：YYYYMMDDHHMM）
+      - name: Generate Version
+        id: version
+        run: |
+          export TZ="Asia/Shanghai"
+          echo "version=$(date +'%Y%m%d%H%M')-${{ github.run_number }}" >> $GITHUB_OUTPUT
+        # 上面这行会把 version=202502060830 格式写入到输出，供后续步骤使用
+
+      # 6. 构建并推送镜像到 Docker Hub
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          file: ./Dockerfiles/Dockerfile
+          push: true
+          # 用多行字符串写 tags，可以同时推多个标签
+          # 第一个是 latest，第二个是基于时间戳的版本号
+          tags: |
+          # ${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan:${{ steps.version.outputs.version }}
+
+          # 多平台设置：同时构建 amd64 和 arm64 (aarch64)
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
