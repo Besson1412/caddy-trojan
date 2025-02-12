@@ -48,7 +48,7 @@ jobs:
           # 用多行字符串写 tags，可以同时推多个标签
           # 第一个是 latest，第二个是基于时间戳的版本号
           tags: |
-          # ${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan:latest
+            # ${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan:${{ steps.version.outputs.version }}
 
           # 多平台设置：同时构建 amd64 和 arm64 (aarch64)
