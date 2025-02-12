@@ -43,7 +43,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: .
-          file: ./Dockerfiles/Dockerfile
+          file: ./Dockerfiles
           push: true
           # 用多行字符串写 tags，可以同时推多个标签
           # 第一个是 latest，第二个是基于时间戳的版本号
