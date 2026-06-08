@@ -17,14 +17,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate Date-Based Tag
+      - name: Generate Date-Based Tag and Image Names
         id: prep
         run: |
-          # 生成 YYYYMMDD.HHMM 标签和常规标签
           TAG_DATE=$(date +%Y%m%d.%H%M)
+          GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/caddy-trojan"
+          
+          # 动态拼接带日期版本号的标签
+          TAGS="${GHCR_IMAGE}:${TAG_DATE}"
+          
+          # 动态拼接 latest 标签
+          LATEST_TAGS="${GHCR_IMAGE}:latest"
+          
+          # 判定是否追加 Docker Hub 标签 (通过环境变量中介，防止 Shell 注入/报错)
+          DOCKERHUB_USER="${{ secrets.DOCKERHUB_USERNAME }}"
+          DOCKERHUB_PASS="${{ secrets.DOCKERHUB_TOKEN }}"
+          
+          if [ -n "$DOCKERHUB_USER" ] && [ -n "$DOCKERHUB_PASS" ]; then
+            DOCKERHUB_IMAGE="${DOCKERHUB_USER}/caddy-trojan"
+            TAGS="${TAGS},${DOCKERHUB_IMAGE}:${TAG_DATE}"
+            LATEST_TAGS="${LATEST_TAGS},${DOCKERHUB_IMAGE}:latest"
+            echo "Info: Docker Hub tags will be included."
+          else
+            echo "Warning: DOCKERHUB_USERNAME or DOCKERHUB_TOKEN secret is missing. Skipping Docker Hub push."
+          fi
+          
           echo "tag_date=${TAG_DATE}" >> $GITHUB_OUTPUT
-          echo "ghcr_image=ghcr.io/${{ github.repository_owner }}/caddy-trojan" >> $GITHUB_OUTPUT
-          echo "dockerhub_image=${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan" >> $GITHUB_OUTPUT
+          echo "ghcr_image=${GHCR_IMAGE}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "latest_tags=${LATEST_TAGS}" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -40,24 +61,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 登录 Docker Hub (仅当 Secrets 配置时才登录)
+      # 登录 Docker Hub (仅在 Secrets 存在时才登录)
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 构建并推送带日期版本号的镜像 (同时推送到 GHCR 和 Docker Hub)
+      # 构建并推送带日期版本号的镜像
       - name: Build and Push Date Tag
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfiles/Dockerfile
           push: true
-          tags: |
-            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
-            ${{ secrets.DOCKERHUB_TOKEN != '' && format('{0}:{1}', steps.prep.outputs.dockerhub_image, steps.prep.outputs.tag_date) || '' }}
+          tags: ${{ steps.prep.outputs.tags }}
 
       # ==== 对新镜像进行 caddyray 兼容性测试 ====
       - name: Run Caddyfile Validation Test
@@ -76,7 +95,7 @@ jobs:
             -e MYDOMAINCF="localhostcf" \
             ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
           
-          # 等待 Caddy 启动
+          # 等待 Caddy 启动并完成自签证书配置
           sleep 5
           
           # 检查容器状态是否为 running
@@ -108,8 +127,6 @@ jobs:
           context: .
           file: ./Dockerfiles/Dockerfile
           push: true
-          tags: |
-            ${{ steps.prep.outputs.ghcr_image }}:latest
-            ${{ secrets.DOCKERHUB_TOKEN != '' && format('{0}:latest', steps.prep.outputs.dockerhub_image) || '' }}
+          tags: ${{ steps.prep.outputs.latest_tags }}
           cache-from: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache
           cache-to: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache,mode=max
