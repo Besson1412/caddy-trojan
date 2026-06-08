@@ -8,12 +8,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/imgk/caddy-trojan/socks"
+	"github.com/imgk/caddy-trojan/pkgs/socks"
 
 	"github.com/imgk/memory-go"
 )
 
-// HandleUDP is ...
 // [AddrType(1 byte)][Addr(max 256 byte)][Port(2 byte)][Len(2 byte)][0x0d, 0x0a][Data(max 65535 byte)]
 func HandleUDP(r io.Reader, w io.Writer, timeout time.Duration, d Dialer) (int64, int64, error) {
 	rc, err := d.ListenPacket("udp", "")
@@ -27,7 +26,7 @@ func HandleUDP(r io.Reader, w io.Writer, timeout time.Duration, d Dialer) (int64
 		Err error
 	}
 
-	errCh := make(chan Result, 0)
+	errCh := make(chan Result)
 	go func(rc net.PacketConn, r io.Reader, errCh chan Result) (nr int64, err error) {
 		defer func() {
 			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrDeadlineExceeded) {
@@ -37,12 +36,18 @@ func HandleUDP(r io.Reader, w io.Writer, timeout time.Duration, d Dialer) (int64
 		}()
 
 		// save previous address
-		ptr, bb := memory.Alloc[byte](socks.MaxAddrLen)
+		ptr, bb, err := memory.Alloc[byte](socks.MaxAddrLen)
+		if err != nil {
+			panic(err)
+		}
 		defer memory.Free(ptr)
 
 		tt := (*net.UDPAddr)(nil)
 
-		ptr, b := memory.Alloc[byte](64*1024 + socks.MaxAddrLen)
+		ptr, b, err := memory.Alloc[byte](64*1024 + socks.MaxAddrLen)
+		if err != nil {
+			panic(err)
+		}
 		defer memory.Free(ptr)
 
 		for {
@@ -88,7 +93,10 @@ func HandleUDP(r io.Reader, w io.Writer, timeout time.Duration, d Dialer) (int64
 	}(rc, r, errCh)
 
 	nr, nw, err := func(rc net.PacketConn, w io.Writer, errCh chan Result, timeout time.Duration) (_, nw int64, err error) {
-		ptr, b := memory.Alloc[byte](64*1024 + socks.MaxAddrLen + 4)
+		ptr, b, err := memory.Alloc[byte](64*1024 + socks.MaxAddrLen + 4)
+		if err != nil {
+			panic(err)
+		}
 		defer memory.Free(ptr)
 
 		b[socks.MaxAddrLen+2] = 0x0d

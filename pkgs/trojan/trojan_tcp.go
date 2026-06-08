@@ -41,8 +41,6 @@ func copyBuffer(w io.Writer, r io.Reader, buf []byte) (n int64, err error) {
 	return n, err
 }
 
-// HandleTCP is ...
-// trojan TCP stream
 func HandleTCP(r io.Reader, w io.Writer, addr net.Addr, d Dialer) (int64, int64, error) {
 	rc, err := d.Dial("tcp", addr.String())
 	if err != nil {
@@ -55,9 +53,12 @@ func HandleTCP(r io.Reader, w io.Writer, addr net.Addr, d Dialer) (int64, int64,
 		Err error
 	}
 
-	errCh := make(chan Result, 0)
+	errCh := make(chan Result)
 	go func(rc net.Conn, r io.Reader, errCh chan Result) {
-		ptr, buf := memory.Alloc[byte](32 * 1024)
+		ptr, buf, err := memory.Alloc[byte](32 * 1024)
+		if err != nil {
+			panic(err)
+		}
 		defer memory.Free(ptr)
 
 		nr, err := copyBuffer(io.Writer(rc), r, buf)
@@ -81,7 +82,10 @@ func HandleTCP(r io.Reader, w io.Writer, addr net.Addr, d Dialer) (int64, int64,
 	}(rc, r, errCh)
 
 	nr, nw, err := func(rc net.Conn, w io.Writer, errCh chan Result) (int64, int64, error) {
-		ptr, buf := memory.Alloc[byte](32 * 1024)
+		ptr, buf, err := memory.Alloc[byte](32 * 1024)
+		if err != nil {
+			panic(err)
+		}
 		defer memory.Free(ptr)
 
 		nw, err := copyBuffer(w, io.Reader(rc), buf)
