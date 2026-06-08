@@ -22,6 +22,7 @@ jobs:
         run: |
           TAG_DATE=$(date +%Y%m%d.%H%M)
           GHCR_IMAGE="ghcr.io/${{ github.repository_owner }}/caddy-trojan"
+          GHCR_IMAGE=$(echo "$GHCR_IMAGE" | tr '[:upper:]' '[:lower:]')
           
           # 动态拼接带日期版本号的标签
           TAGS="${GHCR_IMAGE}:${TAG_DATE}"
@@ -34,7 +35,9 @@ jobs:
           DOCKERHUB_PASS="${{ secrets.DOCKERHUB_PASSWORD }}"
           
           if [ -n "$DOCKERHUB_USER" ] && [ -n "$DOCKERHUB_PASS" ]; then
-            DOCKERHUB_IMAGE="${DOCKERHUB_USER}/caddy-trojan"
+            # 统一转为小写以防命名空间大小写冲突报错
+            DOCKERHUB_USER_LOWER=$(echo "$DOCKERHUB_USER" | tr '[:upper:]' '[:lower:]')
+            DOCKERHUB_IMAGE="${DOCKERHUB_USER_LOWER}/caddy-trojan"
             TAGS="${TAGS},${DOCKERHUB_IMAGE}:${TAG_DATE}"
             LATEST_TAGS="${LATEST_TAGS},${DOCKERHUB_IMAGE}:latest"
             echo "Info: Docker Hub tags will be included."
