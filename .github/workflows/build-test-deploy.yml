@@ -31,7 +31,7 @@ jobs:
           
           # 判定是否追加 Docker Hub 标签 (通过环境变量中介，防止 Shell 注入/报错)
           DOCKERHUB_USER="${{ secrets.DOCKERHUB_USERNAME }}"
-          DOCKERHUB_PASS="${{ secrets.DOCKERHUB_TOKEN }}"
+          DOCKERHUB_PASS="${{ secrets.DOCKERHUB_PASSWORD }}"
           
           if [ -n "$DOCKERHUB_USER" ] && [ -n "$DOCKERHUB_PASS" ]; then
             DOCKERHUB_IMAGE="${DOCKERHUB_USER}/caddy-trojan"
@@ -39,7 +39,7 @@ jobs:
             LATEST_TAGS="${LATEST_TAGS},${DOCKERHUB_IMAGE}:latest"
             echo "Info: Docker Hub tags will be included."
           else
-            echo "Warning: DOCKERHUB_USERNAME or DOCKERHUB_TOKEN secret is missing. Skipping Docker Hub push."
+            echo "Warning: DOCKERHUB_USERNAME or DOCKERHUB_PASSWORD secret is missing. Skipping Docker Hub push."
           fi
           
           echo "tag_date=${TAG_DATE}" >> $GITHUB_OUTPUT
@@ -63,11 +63,11 @@ jobs:
 
       # 登录 Docker Hub (仅在 Secrets 存在时才登录)
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}
+        if: ${{ secrets.DOCKERHUB_PASSWORD != '' && secrets.DOCKERHUB_USERNAME != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       # 构建并推送带日期版本号的镜像
       - name: Build and Push Date Tag
