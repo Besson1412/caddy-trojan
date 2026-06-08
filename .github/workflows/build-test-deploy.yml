@@ -83,6 +83,7 @@ jobs:
           file: ./Dockerfiles/Dockerfile
           push: true
           tags: ${{ steps.prep.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
 
       # ==== 对新镜像进行 caddyray 兼容性测试 ====
       - name: Run Caddyfile Validation Test
@@ -134,5 +135,6 @@ jobs:
           file: ./Dockerfiles/Dockerfile
           push: true
           tags: ${{ steps.prep.outputs.latest_tags }}
+          platforms: linux/amd64,linux/arm64
           cache-from: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache
           cache-to: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache,mode=max
