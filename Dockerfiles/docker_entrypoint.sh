@@ -1,5 +1,10 @@
 #!/bin/sh
 
+# 0. 兼容变量别名
+if [ -z "$MYDOMAINCF" ] && [ -n "$MYDOMAIN_CF" ]; then
+    MYDOMAINCF="$MYDOMAIN_CF"
+fi
+
 # 1. 验证核心环境变量
 if [[ "$MYPASSWD" == "123456" || "$MYPASSWD" == "MY_PASSWORD" ]]; then
     echo "Error: Please reset your MYPASSWD." && exit 1
