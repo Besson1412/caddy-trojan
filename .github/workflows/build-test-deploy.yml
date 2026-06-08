@@ -63,7 +63,10 @@ jobs:
 
       # 登录 Docker Hub (仅在 Secrets 存在时才登录)
       - name: Log in to Docker Hub
-        if: secrets.DOCKERHUB_PASSWORD != '' && secrets.DOCKERHUB_USERNAME != ''
+        env:
+          DOCKERHUB_PASS: ${{ secrets.DOCKERHUB_PASSWORD }}
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        if: env.DOCKERHUB_PASS != '' && env.DOCKERHUB_USER != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
