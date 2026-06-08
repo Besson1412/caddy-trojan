@@ -1,0 +1,115 @@
+name: Build, Test and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Date-Based Tag
+        id: prep
+        run: |
+          # 生成 YYYYMMDD.HHMM 标签和常规标签
+          TAG_DATE=$(date +%Y%m%d.%H%M)
+          echo "tag_date=${TAG_DATE}" >> $GITHUB_OUTPUT
+          echo "ghcr_image=ghcr.io/${{ github.repository_owner }}/caddy-trojan" >> $GITHUB_OUTPUT
+          echo "dockerhub_image=${{ secrets.DOCKERHUB_USERNAME }}/caddy-trojan" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 登录 GitHub Container Registry (GHCR)
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 登录 Docker Hub (仅当 Secrets 配置时才登录)
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 构建并推送带日期版本号的镜像 (同时推送到 GHCR 和 Docker Hub)
+      - name: Build and Push Date Tag
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfiles/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+            ${{ secrets.DOCKERHUB_TOKEN != '' && format('{0}:{1}', steps.prep.outputs.dockerhub_image, steps.prep.outputs.tag_date) || '' }}
+
+      # ==== 对新镜像进行 caddyray 兼容性测试 ====
+      - name: Run Caddyfile Validation Test
+        run: |
+          # 验证容器内的 Caddyfile 语法合法性
+          docker run --rm --entrypoint caddy ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }} validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Run Integration & Stealth 503 Test
+        run: |
+          # 启动测试容器，注入 caddyray 常用的环境变量
+          docker run -d --name caddy-trojan-test \
+            -p 8443:443 \
+            -p 8080:80 \
+            -e MYPASSWD="testpassword123" \
+            -e MYDOMAIN="localhost" \
+            -e MYDOMAINCF="localhostcf" \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          
+          # 等待 Caddy 启动
+          sleep 5
+          
+          # 检查容器状态是否为 running
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-trojan-test)" != "true" ]; then
+            echo "Error: Container crashed upon startup!"
+            docker logs caddy-trojan-test
+            exit 1
+          fi
+          
+          # 测试 503 阻断行为：请求直连域名 localhost 应当直接返回 503
+          # 使用 curl -k (忽略自签名证书错)
+          echo "Testing direct domain 503 blockage..."
+          HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost:8443)
+          if [ "$HTTP_STATUS" != "503" ]; then
+            echo "Error: Direct domain did not return 503! Returned status: $HTTP_STATUS"
+            docker logs caddy-trojan-test
+            exit 1
+          fi
+          echo "Success: Direct domain correctly returned 503."
+
+          # 停止并清理测试容器
+          docker stop caddy-trojan-test
+          docker rm caddy-trojan-test
+
+      # ==== 测试通过：将该日期镜像晋升为 latest 标签并推送 ====
+      - name: Promote and Push latest Tag
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfiles/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.ghcr_image }}:latest
+            ${{ secrets.DOCKERHUB_TOKEN != '' && format('{0}:latest', steps.prep.outputs.dockerhub_image) || '' }}
+          cache-from: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.prep.outputs.ghcr_image }}:buildcache,mode=max
