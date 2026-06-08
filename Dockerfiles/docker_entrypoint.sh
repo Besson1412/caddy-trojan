@@ -81,6 +81,25 @@ EOF
 
 # 判断是否启用了 CDN 伪装站模式 (双域名分离)
 if [ -n "$MYDOMAINCF" ]; then
+    # 动态检测网页目录是否存在。如果不含有首页内容，则自动从分叉库拉取经典伪装网页模板
+    mkdir -p /www/web
+    if [ ! -f "/www/web/index.html" ] && [ ! -f "/www/web/index.php" ]; then
+        echo "Info: /www/web is empty. Downloading decoy web template automatically..."
+        if wget -q -O /tmp/web.tar.gz https://raw.githubusercontent.com/Besson1412/caddy-trojan/main/basic/web.tar.gz; then
+            tar xzf /tmp/web.tar.gz -C /www/web
+            rm -f /tmp/web.tar.gz
+            echo "Success: Decoy web template loaded successfully."
+        else
+            echo "Warning: Failed to download template. Generating default placeholder index.html."
+            cat <<EOF >/www/web/index.html
+<html>
+<head><title>Under Construction</title></head>
+<body><h1>Site is under construction. Please check back later.</h1></body>
+</html>
+EOF
+        fi
+    fi
+
     # 启用防探测模式：直连域名访问普通 HTTP/HTTPS 直接返回 503 阻断连接
     cat <<EOF >>/etc/caddy/Caddyfile
     respond "Service Unavailable" 503 {
