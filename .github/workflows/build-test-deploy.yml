@@ -86,10 +86,17 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
       # ==== 对新镜像进行 caddyray 兼容性测试 ====
-      - name: Run Caddyfile Validation Test
+      - name: Validate Generated Caddyfile
         run: |
-          # 验证容器内的 Caddyfile 语法合法性
-          docker run --rm --entrypoint caddy ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }} validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          # 镜像已不再内置默认 Caddyfile；这里启动容器让 entrypoint 动态生成配置，再校验其语法合法性
+          docker run -d --name caddy-gen-test \
+            -e MYPASSWD="testpassword123" \
+            -e MYDOMAIN="localhost" \
+            -e MYDOMAINCF="localhostcf" \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          sleep 5
+          docker exec caddy-gen-test caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker rm -f caddy-gen-test
 
       - name: Run Integration & Stealth 503 Test
         run: |
@@ -126,6 +133,50 @@ jobs:
           # 停止并清理测试容器
           docker stop caddy-trojan-test
           docker rm caddy-trojan-test
+
+      # ==== 测试「自带 Caddyfile」模式：挂载用户自定义 Caddyfile，且不传 MYPASSWD/MYDOMAIN ====
+      - name: Test Bring-Your-Own Caddyfile Mode
+        run: |
+          # 生成一个最小化的自定义 Caddyfile（不依赖 trojan/域名）
+          printf '%s\n' \
+            '{' \
+            '    admin off' \
+            '}' \
+            ':9000 {' \
+            '    respond "custom-ok" 200' \
+            '}' > /tmp/custom.Caddyfile
+
+          # 故意不传 MYPASSWD / MYDOMAIN，验证挂载的 Caddyfile 会被原样使用
+          docker run -d --name caddy-byo-test \
+            -p 9000:9000 \
+            -v /tmp/custom.Caddyfile:/etc/caddy/Caddyfile \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          sleep 5
+
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-byo-test)" != "true" ]; then
+            echo "Error: BYO-Caddyfile container crashed upon startup!"
+            docker logs caddy-byo-test
+            exit 1
+          fi
+
+          # 确认进入了「自带 Caddyfile」模式
+          if ! docker logs caddy-byo-test 2>&1 | grep -q "user-provided"; then
+            echo "Error: Did not enter bring-your-own-Caddyfile mode!"
+            docker logs caddy-byo-test
+            exit 1
+          fi
+
+          # 确认服务的是用户的 Caddyfile（返回 custom-ok）
+          BODY=$(curl -s http://localhost:9000)
+          if [ "$BODY" != "custom-ok" ]; then
+            echo "Error: Custom Caddyfile was not served! Got: $BODY"
+            docker logs caddy-byo-test
+            exit 1
+          fi
+          echo "Success: Bring-your-own-Caddyfile mode works as expected."
+
+          docker stop caddy-byo-test
+          docker rm caddy-byo-test
 
       # ==== 测试通过：将该日期镜像晋升为 latest 标签并推送 ====
       - name: Promote and Push latest Tag

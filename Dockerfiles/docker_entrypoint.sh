@@ -5,22 +5,50 @@ if [ -z "$MYDOMAINCF" ] && [ -n "$MYDOMAIN_CF" ]; then
     MYDOMAINCF="$MYDOMAIN_CF"
 fi
 
+# 启动 Caddy 的统一入口：若设置了出站代理 MYPROXY，则注入 ALL_PROXY 供 trojan env_proxy 使用
+run_caddy() {
+    if [ -n "$MYPROXY" ]; then
+        echo "Info: Starting Caddy with outbound proxy: $MYPROXY"
+        exec env ALL_PROXY="$MYPROXY" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    fi
+    exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+# A. 自带 Caddyfile 模式：
+# 如果用户挂载了一个非空的 /etc/caddy/Caddyfile，则完全尊重该配置，原样运行；
+# 跳过自动生成以及 MYPASSWD / MYDOMAIN 校验（此时这两个变量可以不传）。
+# 镜像构建时已删除 base 镜像自带的默认 Caddyfile，因此该文件存在即代表是用户挂载进来的。
+if [ -s /etc/caddy/Caddyfile ]; then
+    echo "Info: Detected a user-provided /etc/caddy/Caddyfile. Using it as-is (skip auto-generation)."
+    run_caddy
+fi
+
 # 1. 验证核心环境变量
-if [[ "$MYPASSWD" == "123456" || "$MYPASSWD" == "MY_PASSWORD" ]]; then
+# 注意：base 镜像为 Alpine，/bin/sh 是 busybox ash，不支持 [[ ]]，这里统一使用 POSIX 的 [ ] 语法
+if [ -z "$MYPASSWD" ] || [ "$MYPASSWD" = "123456" ] || [ "$MYPASSWD" = "MY_PASSWORD" ]; then
     echo "Error: Please reset your MYPASSWD." && exit 1
 fi
 
-if [[ "$MYDOMAIN" == "1.1.1.1.nip.io" || "$MYDOMAIN" == "MY_DOMAIN.COM" ]]; then
-    echo "Error: Please reset your MYDOMAIN." && exit 1
+# 未指定域名（为空或仍为默认占位符）时，自动探测公网 IP 并回退到 <IP>.nip.io，实现免域名开箱即用
+if [ -z "$MYDOMAIN" ] || [ "$MYDOMAIN" = "1.1.1.1.nip.io" ] || [ "$MYDOMAIN" = "MY_DOMAIN.COM" ]; then
+    echo "Info: MYDOMAIN not set. Detecting public IP for nip.io fallback..."
+    PUBIP=$(wget -qO- https://api.ipify.org 2>/dev/null \
+        || wget -qO- https://ifconfig.me 2>/dev/null \
+        || wget -qO- https://ipinfo.io/ip 2>/dev/null)
+    # 去掉可能的换行/空白
+    PUBIP=$(echo "$PUBIP" | tr -d '[:space:]')
+    if [ -n "$PUBIP" ]; then
+        MYDOMAIN="${PUBIP}.nip.io"
+        echo "Info: Using auto-generated domain: $MYDOMAIN"
+    else
+        echo "Error: MYDOMAIN not set and failed to auto-detect public IP. Please set MYDOMAIN explicitly." && exit 1
+    fi
 fi
 
-# 2. 动态设置前置代理与运行命令
+# 2. 动态设置前置代理模式（写入自动生成的 Caddyfile）
 TROJAN_PROXY_MODE="no_proxy"
-RUN_CMD="caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
 if [ -n "$MYPROXY" ]; then
     TROJAN_PROXY_MODE="env_proxy"
-    RUN_CMD="env ALL_PROXY=$MYPROXY caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
-    echo "Info: Starting Caddy with outbound proxy: $MYPROXY"
 fi
 
 # 3. 构造 Caddyfile 全局配置块
@@ -166,4 +194,4 @@ EOF
 echo "Info: Dynamic Caddyfile compiled successfully."
 
 # 6. 运行 Caddy
-exec $RUN_CMD
+run_caddy
