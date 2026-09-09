@@ -14,6 +14,35 @@ run_caddy() {
     exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 }
 
+# 间接变量读取：POSIX/busybox ash 没有 bash 的 ${!name}，用 eval 代替。
+# 用法：get_var "MYDOMAIN_$NN"
+get_var() {
+    eval "printf '%s' \"\${$1:-}\""
+}
+
+# 确保伪装网站模板已就绪（多个 CDN 域名 profile 共用同一份，只需下载一次，
+# 这里做成幂等函数供各处复用，而不是每个 profile 各自复制一遍下载逻辑）。
+ensure_decoy_web() {
+    mkdir -p /www/web
+    if [ -f "/www/web/index.html" ] || [ -f "/www/web/index.php" ]; then
+        return 0
+    fi
+    echo "Info: /www/web is empty. Downloading decoy web template automatically..."
+    if wget -q -O /tmp/web.tar.gz https://raw.githubusercontent.com/Besson1412/caddy-trojan/main/basic/web.tar.gz; then
+        tar xzf /tmp/web.tar.gz -C /www/web
+        rm -f /tmp/web.tar.gz
+        echo "Success: Decoy web template loaded successfully."
+    else
+        echo "Warning: Failed to download template. Generating default placeholder index.html."
+        cat <<EOF >/www/web/index.html
+<html>
+<head><title>Under Construction</title></head>
+<body><h1>Site is under construction. Please check back later.</h1></body>
+</html>
+EOF
+    fi
+}
+
 # A. 自带 Caddyfile 模式：
 # 如果用户挂载了一个非空的 /etc/caddy/Caddyfile，则完全尊重该配置，原样运行；
 # 跳过自动生成以及 MYPASSWD / MYDOMAIN 校验（此时这两个变量可以不传）。
@@ -45,13 +74,37 @@ if [ -z "$MYDOMAIN" ] || [ "$MYDOMAIN" = "1.1.1.1.nip.io" ] || [ "$MYDOMAIN" = "
     fi
 fi
 
+# 1.5 扫描编号 profile（01~99）：多域名/多入口支持。
+# 每个编号 NN 通过三个变量配置，全部可选，但至少要有一个域名才算这个 profile 生效：
+#   MYDOMAIN_NN     直连域名（有自己的证书，直接暴露）
+#   MYDOMAIN_CF_NN  经 CDN（如 Cloudflare）转发的域名（伪装成普通网站，未命中 trojan 认证时用 file_server 兜底）
+#   MYPROXY_NN      这个入口的出站代理，纯 host:port（socks5，无需 scheme 前缀，也兼容带 socks5:// 前缀直接抄
+#                   MYPROXY 格式的写法——会被自动去掉），不设置则该入口直连不经代理
+# 不设置任何编号变量时，行为跟旧版完全一致（只有下面 MYDOMAIN/MYDOMAINCF/MYPROXY 这一个默认入口）。
+NUMBERED_PROFILES=""
+i=1
+while [ "$i" -le 99 ]; do
+    NN=$(printf '%02d' "$i")
+    i=$((i + 1))
+    d=$(get_var "MYDOMAIN_$NN")
+    dcf=$(get_var "MYDOMAIN_CF_$NN")
+    if [ -n "$d" ] || [ -n "$dcf" ]; then
+        NUMBERED_PROFILES="$NUMBERED_PROFILES $NN"
+    fi
+done
+if [ -n "$NUMBERED_PROFILES" ]; then
+    echo "Info: Detected numbered entry profiles:$NUMBERED_PROFILES"
+fi
+
 # 2. 动态设置前置代理模式（写入自动生成的 Caddyfile）
 TROJAN_PROXY_MODE="no_proxy"
 if [ -n "$MYPROXY" ]; then
     TROJAN_PROXY_MODE="env_proxy"
 fi
 
-# 3. 构造 Caddyfile 全局配置块
+# 3. 构造 Caddyfile 全局配置块（trojan app 级配置，users/默认代理是全局共享的——
+# 所有域名/入口用同一个 MYPASSWD 认证，区别只在于连的是哪个域名，从而在下面第 4/4.5
+# 步走到哪个 proxy_name）
 cat <<EOF >/etc/caddy/Caddyfile
 {
     order trojan before respond
@@ -70,6 +123,25 @@ cat <<EOF >/etc/caddy/Caddyfile
         caddy
         $TROJAN_PROXY_MODE
         users $MYPASSWD
+EOF
+
+# 每个编号 profile 在这里注册一个具名代理（named_proxy），下面第 4.5 步生成的
+# 对应 site block 用 `proxy_name $NN` 引用它——这样同一个 Caddy 进程里，不同域名
+# 天然就能各自转发到不同的出口，不需要多起几个 Caddy 容器。
+for NN in $NUMBERED_PROFILES; do
+    proxy_target=$(get_var "MYPROXY_$NN")
+    # 允许直接照抄 MYPROXY 那种 socks5://host:port 写法，这里统一去掉 scheme 前缀，
+    # 因为 named_proxy 的 socks_proxy 类型只认 host:port（跟顶层 ALL_PROXY 的语义不同）。
+    proxy_target=${proxy_target#socks5://}
+    proxy_target=${proxy_target#socks://}
+    if [ -n "$proxy_target" ]; then
+        echo "        named_proxy $NN socks_proxy $proxy_target" >>/etc/caddy/Caddyfile
+    else
+        echo "        named_proxy $NN no_proxy" >>/etc/caddy/Caddyfile
+    fi
+done
+
+cat <<EOF >>/etc/caddy/Caddyfile
     }
     log {
         output file /var/log/caddy/access.log
@@ -81,7 +153,8 @@ cat <<EOF >/etc/caddy/Caddyfile
 }
 EOF
 
-# 4. 构造直接连接的服务块 (MYDOMAIN)
+# 4. 构造默认入口的服务块（MYDOMAIN / MYDOMAINCF）——跟旧版本完全一致，走的是全局
+# 默认代理（第 2 步的 $TROJAN_PROXY_MODE / MYPROXY），不带 proxy_name。
 cat <<EOF >>/etc/caddy/Caddyfile
 :443, $MYDOMAIN {
 EOF
@@ -114,24 +187,7 @@ EOF
 
 # 判断是否启用了 CDN 伪装站模式 (双域名分离)
 if [ -n "$MYDOMAINCF" ]; then
-    # 动态检测网页目录是否存在。如果不含有首页内容，则自动从分叉库拉取经典伪装网页模板
-    mkdir -p /www/web
-    if [ ! -f "/www/web/index.html" ] && [ ! -f "/www/web/index.php" ]; then
-        echo "Info: /www/web is empty. Downloading decoy web template automatically..."
-        if wget -q -O /tmp/web.tar.gz https://raw.githubusercontent.com/Besson1412/caddy-trojan/main/basic/web.tar.gz; then
-            tar xzf /tmp/web.tar.gz -C /www/web
-            rm -f /tmp/web.tar.gz
-            echo "Success: Decoy web template loaded successfully."
-        else
-            echo "Warning: Failed to download template. Generating default placeholder index.html."
-            cat <<EOF >/www/web/index.html
-<html>
-<head><title>Under Construction</title></head>
-<body><h1>Site is under construction. Please check back later.</h1></body>
-</html>
-EOF
-        fi
-    fi
+    ensure_decoy_web
 
     # 启用防探测模式：直连域名访问普通 HTTP/HTTPS 直接返回 503 阻断连接
     cat <<EOF >>/etc/caddy/Caddyfile
@@ -183,6 +239,99 @@ else
 }
 EOF
 fi
+
+# 4.5 构造编号 profile 的服务块。跟第 4 步同一套写法，唯一区别是 trojan 子块里
+# 多了一行 `proxy_name $NN`，指向第 3 步注册的那个具名代理；direct/CF 两种域名
+# 独立可选（都不设置就整段跳过），互不依赖。
+for NN in $NUMBERED_PROFILES; do
+    d=$(get_var "MYDOMAIN_$NN")
+    dcf=$(get_var "MYDOMAIN_CF_$NN")
+
+    if [ -n "$d" ]; then
+        cat <<EOF >>/etc/caddy/Caddyfile
+:443, $d {
+EOF
+        if [ -n "$MYEMAIL" ]; then
+            cat <<EOF >>/etc/caddy/Caddyfile
+    tls $MYEMAIL {
+        protocols tls1.2 tls1.2
+        ciphers TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+    }
+EOF
+        else
+            cat <<EOF >>/etc/caddy/Caddyfile
+    tls {
+        protocols tls1.2 tls1.2
+        ciphers TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+    }
+EOF
+        fi
+
+        cat <<EOF >>/etc/caddy/Caddyfile
+    log {
+        level ERROR
+    }
+    trojan {
+        websocket
+        proxy_name $NN
+    }
+EOF
+
+        if [ -n "$dcf" ]; then
+            cat <<EOF >>/etc/caddy/Caddyfile
+    respond "Service Unavailable" 503 {
+        close
+    }
+}
+EOF
+        else
+            cat <<EOF >>/etc/caddy/Caddyfile
+    @host_$NN host $d
+    route @host_$NN {
+        file_server {
+            root /usr/share/caddy
+        }
+    }
+}
+EOF
+        fi
+    fi
+
+    if [ -n "$dcf" ]; then
+        ensure_decoy_web
+
+        cat <<EOF >>/etc/caddy/Caddyfile
+$dcf {
+EOF
+        if [ -n "$MYEMAIL" ]; then
+            cat <<EOF >>/etc/caddy/Caddyfile
+    tls $MYEMAIL {
+        protocols tls1.2 tls1.3
+    }
+EOF
+        else
+            cat <<EOF >>/etc/caddy/Caddyfile
+    tls {
+        protocols tls1.2 tls1.3
+    }
+EOF
+        fi
+
+        cat <<EOF >>/etc/caddy/Caddyfile
+    log {
+        level ERROR
+    }
+    trojan {
+        websocket
+        proxy_name $NN
+    }
+    file_server {
+        root /www/web
+    }
+}
+EOF
+    fi
+done
 
 # 5. 端口 80 强制跳转
 cat <<EOF >>/etc/caddy/Caddyfile

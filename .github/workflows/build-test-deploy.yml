@@ -137,6 +137,47 @@ jobs:
           docker stop caddy-trojan-test
           docker rm caddy-trojan-test
 
+      # ==== 测试编号多入口（MYDOMAIN_NN / MYDOMAIN_CF_NN / MYPROXY_NN）====
+      - name: Run Numbered Multi-Domain Entry Test
+        run: |
+          # 01：直连域名 + 指定出站代理；02：仅 CDN 域名、不设代理（应回退 no_proxy）；
+          # 默认入口保持不变，验证新功能不影响旧行为。
+          docker run -d --name caddy-multi-test \
+            -e MYPASSWD="testpassword123" \
+            -e MYDOMAIN="localhost" \
+            -e MYDOMAIN_01="jp.localhost" \
+            -e MYPROXY_01="127.0.0.1:1080" \
+            -e MYDOMAIN_CF_02="us-cf.localhost" \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          sleep 5
+
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-multi-test)" != "true" ]; then
+            echo "Error: Container crashed upon startup with numbered profiles set!"
+            docker logs caddy-multi-test
+            exit 1
+          fi
+
+          echo "Validating generated Caddyfile..."
+          docker exec caddy-multi-test caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+          echo "Checking named_proxy / proxy_name wiring..."
+          GENERATED=$(docker exec caddy-multi-test cat /etc/caddy/Caddyfile)
+          for pattern in \
+            "named_proxy 01 socks_proxy 127.0.0.1:1080" \
+            "named_proxy 02 no_proxy" \
+            "proxy_name 01" \
+            "proxy_name 02"; do
+            if ! echo "$GENERATED" | grep -qF "$pattern"; then
+              echo "Error: expected line not found in generated Caddyfile: $pattern"
+              echo "$GENERATED"
+              exit 1
+            fi
+          done
+          echo "Success: numbered multi-domain entries generated correctly."
+
+          docker stop caddy-multi-test
+          docker rm caddy-multi-test
+
       # ==== 测试「自带 Caddyfile」模式：挂载用户自定义 Caddyfile，且不传 MYPASSWD/MYDOMAIN ====
       - name: Test Bring-Your-Own Caddyfile Mode
         run: |
