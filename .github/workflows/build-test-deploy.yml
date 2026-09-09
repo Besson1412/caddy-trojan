@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # 自建 ephemeral self-hosted runner，装在 gcp-tw3 上，跑 CI 不消耗 GitHub
+    # 账号的 Actions 额度。见 Besson1412/caddyray 仓库 ci-runner/README.md。
+    runs-on: [self-hosted, gcp-tw3]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
