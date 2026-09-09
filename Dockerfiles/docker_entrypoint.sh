@@ -248,8 +248,12 @@ for NN in $NUMBERED_PROFILES; do
     dcf=$(get_var "MYDOMAIN_CF_$NN")
 
     if [ -n "$d" ]; then
+        # 注意：这里不能像默认入口那样写成 ":443, $d {"——裸 ":443" 是个通配地址
+        # （不看 SNI，兜底吃掉所有连接），默认入口已经占了这一个通配，编号入口
+        # 只按自己的域名（SNI）匹配即可，多个 site block 都声明 ":443" 会被 Caddy
+        # 判定为 "ambiguous site definition"（实测踩过这个坑，见 CI 失败记录）。
         cat <<EOF >>/etc/caddy/Caddyfile
-:443, $d {
+$d {
 EOF
         if [ -n "$MYEMAIL" ]; then
             cat <<EOF >>/etc/caddy/Caddyfile
