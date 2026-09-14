@@ -12,9 +12,10 @@ permissions:
 
 jobs:
   build-and-test:
-    # 自建 ephemeral self-hosted runner，装在 gcp-tw3 上，跑 CI 不消耗 GitHub
-    # 账号的 Actions 额度。见 Besson1412/caddyray 仓库 ci-runner/README.md。
-    runs-on: [self-hosted, gcp-tw3]
+    # 自建 self-hosted runner，装在 pve001 上，跑 CI 不消耗 GitHub 账号的
+    # Actions 额度。（此前跑在 gcp-tw3 的 ephemeral runner 上，已迁移到
+    # pve001）
+    runs-on: [self-hosted, pve001, caddy-trojan]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
