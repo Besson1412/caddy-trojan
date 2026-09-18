@@ -151,6 +151,14 @@ set; you can set just one of the two, or both (same direct-vs-CDN semantics as t
 entry). Entries you don't configure simply don't exist — setting none of these variables
 reproduces the exact behavior of the unmodified upstream image.
 
+An unauthenticated request to `MYDOMAIN_NN` (a direct entry with no `MYDOMAIN_CF_NN` of its
+own) gets a bare `503 Service Unavailable` if this entry has its own `MYDOMAIN_CF_NN`, *or*
+if the top-level `MYDOMAINCF` is set anywhere in this deployment — that second case covers
+the common pattern of one shared decoy site fronting many direct-connect entries, where you
+want every direct domain to look equally "unavailable" rather than only the ones with their
+own dedicated CDN companion. With no CDN pattern configured at all, it falls back to serving
+`/usr/share/caddy` like the default entry does.
+
 ```
 docker run \
   --env MYPASSWD=MY_PASSWORD \
