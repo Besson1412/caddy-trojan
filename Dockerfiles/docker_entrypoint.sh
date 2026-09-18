@@ -281,7 +281,15 @@ EOF
     }
 EOF
 
-        if [ -n "$dcf" ]; then
+        # 防探测姿态跟这个 NN 有没有自己的 CDN 伪装站companion（$dcf）无关，看整个
+        # 部署有没有在用 CDN 伪装站模式（$MYDOMAINCF，全局那一个）——多域名场景下
+        # 通常只共用一个伪装网站（比如 caddyray：18 个编号入口全部指向同一份
+        # MYDOMAINCF，没有一个单独配自己的 MYDOMAIN_CF_NN），这时每一个直连域名
+        # （包括编号入口）未认证访问都该表现成"服务暂时不可用"，不该有的编号入口
+        # 502/503、有的却露出一个空的默认 file_server 目录列表——那反而是能被扫描器
+        # 用来区分"哪些域名是真入口"的信号。没有任何 CDN 伪装站的部署（$MYDOMAINCF
+        # 和这个 NN 的 $dcf 都没配）则维持原来的 file_server 兜底，不强加 503。
+        if [ -n "$dcf" ] || [ -n "$MYDOMAINCF" ]; then
             cat <<EOF >>/etc/caddy/Caddyfile
     respond "Service Unavailable" 503 {
         close
