@@ -4,12 +4,15 @@ ENV MYPASSWD=123456 \
     MYDOMAIN=1.1.1.1.nip.io \
     MYEMAIL="" \
     MYDOMAINCF="" \
-    MYPROXY=""
+    MYPROXY="" \
+    CF_DNS_API_TOKEN=""
 
-# 为 entrypoint 脚本设置可执行权限，并使用 add-package 构建 caddy-trojan 扩展
+# 为 entrypoint 脚本设置可执行权限，并使用 add-package 构建 caddy-trojan 扩展；
+# caddy-dns/cloudflare 用于可选的 ACME DNS-01 验证（设置 CF_DNS_API_TOKEN 时启用，
+# 见 docker_entrypoint.sh 第 3 步）
 COPY docker_entrypoint.sh /docker_entrypoint.sh
 RUN chmod +x /docker_entrypoint.sh \
-    && caddy add-package github.com/imgk/caddy-trojan \
+    && caddy add-package github.com/imgk/caddy-trojan github.com/caddy-dns/cloudflare \
     && mkdir -p /www/web \
     && echo '<html><head><title>Welcome</title></head><body><h1>Service is running.</h1></body></html>' > /www/web/index.html \
     && rm -f /etc/caddy/Caddyfile

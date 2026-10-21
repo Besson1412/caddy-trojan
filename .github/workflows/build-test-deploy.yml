@@ -178,6 +178,49 @@ jobs:
           docker stop caddy-multi-test
           docker rm caddy-multi-test
 
+      # ==== 测试可选的 ACME DNS-01（CF_DNS_API_TOKEN）====
+      - name: Test Optional ACME DNS-01 via Cloudflare
+        run: |
+          # 设置 token：全局应出现 acme_dns cloudflare，且 token 只以 {env.*} 占位符引用、
+          # 明文不出现在 Caddyfile 里；caddy-dns/cloudflare 模块必须已编译进镜像
+          docker run -d --name caddy-dns-test \
+            -e MYPASSWD="testpassword123" \
+            -e MYDOMAIN="localhost" \
+            -e MYDOMAINCF="cf.localhost" \
+            -e MYDOMAIN_01="jp.localhost" \
+            -e MYPROXY_01="127.0.0.1:1080" \
+            -e CF_DNS_API_TOKEN="ci-dummy-token-do-not-leak" \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          sleep 5
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-dns-test)" != "true" ]; then
+            echo "Error: container crashed with CF_DNS_API_TOKEN set"; docker logs caddy-dns-test; exit 1
+          fi
+          docker exec caddy-dns-test caddy list-modules | grep -qx "dns.providers.cloudflare" \
+            || { echo "Error: dns.providers.cloudflare module missing"; exit 1; }
+          docker exec caddy-dns-test caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          GENERATED=$(docker exec caddy-dns-test cat /etc/caddy/Caddyfile)
+          echo "$GENERATED" | grep -qF 'acme_dns cloudflare {env.CF_DNS_API_TOKEN}' \
+            || { echo "Error: acme_dns line missing"; echo "$GENERATED"; exit 1; }
+          if echo "$GENERATED" | grep -qF 'ci-dummy-token-do-not-leak'; then
+            echo "Error: token leaked into Caddyfile in plain text"; exit 1
+          fi
+          ADAPTED=$(docker exec caddy-dns-test caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile)
+          echo "$ADAPTED" | grep -q '"name":"cloudflare"' \
+            || { echo "Error: adapted JSON has no cloudflare DNS provider"; echo "$ADAPTED"; exit 1; }
+          docker rm -f caddy-dns-test
+
+          # 不设置 token：不应生成 acme_dns（保持旧行为）
+          docker run -d --name caddy-nodns-test \
+            -e MYPASSWD="testpassword123" \
+            -e MYDOMAIN="localhost" \
+            ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
+          sleep 5
+          if docker exec caddy-nodns-test cat /etc/caddy/Caddyfile | grep -q acme_dns; then
+            echo "Error: acme_dns generated without CF_DNS_API_TOKEN"; exit 1
+          fi
+          docker rm -f caddy-nodns-test
+          echo "Success: optional DNS-01 generated correctly."
+
       # ==== 测试「自带 Caddyfile」模式：挂载用户自定义 Caddyfile，且不传 MYPASSWD/MYDOMAIN ====
       - name: Test Bring-Your-Own Caddyfile Mode
         run: |

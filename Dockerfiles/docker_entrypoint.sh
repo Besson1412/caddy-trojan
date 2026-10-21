@@ -102,6 +102,21 @@ if [ -n "$MYPROXY" ]; then
     TROJAN_PROXY_MODE="env_proxy"
 fi
 
+# 2.5 可选：ACME DNS-01 验证（Cloudflare）
+# 默认 Caddy 用 HTTP-01 / TLS-ALPN-01 签证书，都要求 CA 能从公网连到本机 80/443。
+# 域名开着 Cloudflare 代理（橙云）时这两种方式都会被挡住：TLS-ALPN 被 Cloudflare
+# 终止，HTTP-01 被跳转到 HTTPS 后回源——本机还没有证书时回源握手失败（525），于是
+# 第一次签发永远签不下来（已有证书时续期反而能成功）。设置 CF_DNS_API_TOKEN（需要
+# 该 zone 的 Zone:Read + DNS:Edit 权限）后，所有域名改用 DNS-01：Caddy 通过
+# Cloudflare API 临时写一条 _acme-challenge TXT 记录来证明域名归属，与是否走代理、
+# 端口是否可达都无关。不设置时行为跟之前完全一样。
+# token 只通过 {env.CF_DNS_API_TOKEN} 占位符引用，不会以明文写进 Caddyfile。
+ACME_DNS_LINE=""
+if [ -n "$CF_DNS_API_TOKEN" ]; then
+    echo "Info: CF_DNS_API_TOKEN set, using ACME DNS-01 challenge via Cloudflare for all domains."
+    ACME_DNS_LINE="acme_dns cloudflare {env.CF_DNS_API_TOKEN}"
+fi
+
 # 3. 构造 Caddyfile 全局配置块（trojan app 级配置，users/默认代理是全局共享的——
 # 所有域名/入口用同一个 MYPASSWD 认证，区别只在于连的是哪个域名，从而在下面第 4/4.5
 # 步走到哪个 proxy_name）
@@ -110,6 +125,7 @@ cat <<EOF >/etc/caddy/Caddyfile
     order trojan before respond
     order trojan before route
     https_port 443
+    $ACME_DNS_LINE
     servers :443 {
         listener_wrappers {
             trojan
