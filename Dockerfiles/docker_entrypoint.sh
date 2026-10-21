@@ -110,11 +110,26 @@ fi
 # 该 zone 的 Zone:Read + DNS:Edit 权限）后，所有域名改用 DNS-01：Caddy 通过
 # Cloudflare API 临时写一条 _acme-challenge TXT 记录来证明域名归属，与是否走代理、
 # 端口是否可达都无关。不设置时行为跟之前完全一样。
+# 注意：token 格式不合法（caddy-dns/cloudflare 要求 35~50 位 [A-Za-z0-9_-]，或
+# cfut_/cfat_ 开头的新格式）时 Caddy 会直接起不来，且报错信息里带着 token 明文。
 # token 只通过 {env.CF_DNS_API_TOKEN} 占位符引用，不会以明文写进 Caddyfile。
+#
+# 邮箱的处理：启用 DNS-01 时，ACME 邮箱改成全局 `email` 选项，下面各站点的 tls 块
+# 不再带邮箱参数（统一走 `tls { ... }`）。原因：默认入口的站点地址是
+# `:443, $MYDOMAIN`，其中不带主机名的 `:443` 会让这个站点的证书策略同时成为
+# "兜底"策略；站点级 `tls 邮箱` 会生成显式的 ACME issuer，而兜底策略里是全局的
+# 默认 issuer，再加上全局 acme_dns 之后两者对不上，Caddy 直接拒绝启动（2026-10-21
+# 在 caddyray 的 ncx-us 上实际发生过：automation policy ... is also default/catch-all
+# policy ... in conflict）。邮箱放到全局后，所有站点和兜底策略用的是同一组 issuer。
 ACME_DNS_LINE=""
+ACME_EMAIL_LINE=""
 if [ -n "$CF_DNS_API_TOKEN" ]; then
     echo "Info: CF_DNS_API_TOKEN set, using ACME DNS-01 challenge via Cloudflare for all domains."
     ACME_DNS_LINE="acme_dns cloudflare {env.CF_DNS_API_TOKEN}"
+    if [ -n "$MYEMAIL" ]; then
+        ACME_EMAIL_LINE="email $MYEMAIL"
+        MYEMAIL=""
+    fi
 fi
 
 # 3. 构造 Caddyfile 全局配置块（trojan app 级配置，users/默认代理是全局共享的——
@@ -126,6 +141,7 @@ cat <<EOF >/etc/caddy/Caddyfile
     order trojan before route
     https_port 443
     $ACME_DNS_LINE
+    $ACME_EMAIL_LINE
     servers :443 {
         listener_wrappers {
             trojan
