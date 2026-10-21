@@ -232,12 +232,19 @@ jobs:
           docker rm -f caddy-dns-test
 
           # 不设置 token：不应生成 acme_dns（保持旧行为）
+          # 同样要用公网形式的域名：给 localhost 指定 ACME 邮箱会让 Caddy 直接拒绝启动
           docker run -d --name caddy-nodns-test \
             -e MYPASSWD="testpassword123" \
             -e MYEMAIL="ci@example.com" \
-            -e MYDOMAIN="localhost" \
+            -e MYDOMAIN="nodns-test.example.com" \
             ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
           sleep 5
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-nodns-test)" != "true" ]; then
+            echo "Error: container crashed without CF_DNS_API_TOKEN"; docker logs caddy-nodns-test
+            docker cp caddy-nodns-test:/var/log/caddy/access.log /tmp/caddy-nodns-test.log 2>/dev/null \
+              && tail -20 /tmp/caddy-nodns-test.log
+            exit 1
+          fi
           if docker exec caddy-nodns-test cat /etc/caddy/Caddyfile | grep -q acme_dns; then
             echo "Error: acme_dns generated without CF_DNS_API_TOKEN"; exit 1
           fi
