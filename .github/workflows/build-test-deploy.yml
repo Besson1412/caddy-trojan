@@ -190,6 +190,7 @@ jobs:
           # caddy-dns/cloudflare 启动时会校验格式，不符合直接让 Caddy 起不来。
           docker run -d --name caddy-dns-test \
             -e MYPASSWD="testpassword123" \
+            -e MYEMAIL="ci@example.com" \
             -e MYDOMAIN="dns-test.example.com" \
             -e MYDOMAINCF="dns-test-cf.example.com" \
             -e MYDOMAIN_01="dns-test-jp.example.com" \
@@ -208,6 +209,13 @@ jobs:
             || { echo "Error: dns.providers.cloudflare module missing"; exit 1; }
           docker exec caddy-dns-test caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           GENERATED=$(docker exec caddy-dns-test cat /etc/caddy/Caddyfile)
+          # 设置了 MYEMAIL 时（caddyray 生产环境就是这样），邮箱必须挪到全局、站点 tls 块
+          # 不带邮箱，否则 `:443, 域名` 这个兜底站点会和全局 acme_dns 冲突、Caddy 起不来
+          echo "$GENERATED" | grep -qE '^    email ci@example\.com$' \
+            || { echo "Error: global email line missing in DNS-01 mode"; echo "$GENERATED"; exit 1; }
+          if echo "$GENERATED" | grep -qE '^    tls ci@example\.com'; then
+            echo "Error: site-level tls <email> still generated in DNS-01 mode"; echo "$GENERATED"; exit 1
+          fi
           echo "$GENERATED" | grep -qF 'acme_dns cloudflare {env.CF_DNS_API_TOKEN}' \
             || { echo "Error: acme_dns line missing"; echo "$GENERATED"; exit 1; }
           if echo "$GENERATED" | grep -qF 'ci0dummy0token0do0not0leak00000000000000'; then
@@ -224,14 +232,24 @@ jobs:
           docker rm -f caddy-dns-test
 
           # 不设置 token：不应生成 acme_dns（保持旧行为）
+          # 同样要用公网形式的域名：给 localhost 指定 ACME 邮箱会让 Caddy 直接拒绝启动
           docker run -d --name caddy-nodns-test \
             -e MYPASSWD="testpassword123" \
-            -e MYDOMAIN="localhost" \
+            -e MYEMAIL="ci@example.com" \
+            -e MYDOMAIN="nodns-test.example.com" \
             ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
           sleep 5
+          if [ "$(docker inspect -f '{{.State.Running}}' caddy-nodns-test)" != "true" ]; then
+            echo "Error: container crashed without CF_DNS_API_TOKEN"; docker logs caddy-nodns-test
+            docker cp caddy-nodns-test:/var/log/caddy/access.log /tmp/caddy-nodns-test.log 2>/dev/null \
+              && tail -20 /tmp/caddy-nodns-test.log
+            exit 1
+          fi
           if docker exec caddy-nodns-test cat /etc/caddy/Caddyfile | grep -q acme_dns; then
             echo "Error: acme_dns generated without CF_DNS_API_TOKEN"; exit 1
           fi
+          docker exec caddy-nodns-test grep -qE '^    tls ci@example\.com' /etc/caddy/Caddyfile \
+            || { echo "Error: without CF_DNS_API_TOKEN, site-level tls <email> should be unchanged"; exit 1; }
           docker rm -f caddy-nodns-test
           echo "Success: optional DNS-01 generated correctly."
 
