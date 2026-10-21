@@ -182,12 +182,15 @@ jobs:
       - name: Test Optional ACME DNS-01 via Cloudflare
         run: |
           # 设置 token：全局应出现 acme_dns cloudflare，且 token 只以 {env.*} 占位符引用、
-          # 明文不出现在 Caddyfile 里；caddy-dns/cloudflare 模块必须已编译进镜像
+          # 明文不出现在 Caddyfile 里；caddy-dns/cloudflare 模块必须已编译进镜像。
+          # 这里用公网形式的域名（example.com 子域），不能用 localhost：Caddy 对 localhost
+          # 一律用内置 CA，不会生成 ACME issuer，adapt 后也就看不到 DNS 验证配置。
+          # 容器起来后会真的去尝试签发并失败（假 token），不影响这里只检查配置。
           docker run -d --name caddy-dns-test \
             -e MYPASSWD="testpassword123" \
-            -e MYDOMAIN="localhost" \
-            -e MYDOMAINCF="cf.localhost" \
-            -e MYDOMAIN_01="jp.localhost" \
+            -e MYDOMAIN="dns-test.example.com" \
+            -e MYDOMAINCF="dns-test-cf.example.com" \
+            -e MYDOMAIN_01="dns-test-jp.example.com" \
             -e MYPROXY_01="127.0.0.1:1080" \
             -e CF_DNS_API_TOKEN="ci-dummy-token-do-not-leak" \
             ${{ steps.prep.outputs.ghcr_image }}:${{ steps.prep.outputs.tag_date }}
@@ -205,8 +208,13 @@ jobs:
             echo "Error: token leaked into Caddyfile in plain text"; exit 1
           fi
           ADAPTED=$(docker exec caddy-dns-test caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile)
-          echo "$ADAPTED" | grep -q '"name":"cloudflare"' \
-            || { echo "Error: adapted JSON has no cloudflare DNS provider"; echo "$ADAPTED"; exit 1; }
+          # 每个 ACME issuer（Let's Encrypt / ZeroSSL）都要带上 cloudflare 的 DNS 验证
+          ACME_N=$(echo "$ADAPTED" | grep -o '"module":"acme"' | wc -l)
+          DNS_N=$(echo "$ADAPTED" | grep -o '"name":"cloudflare"' | wc -l)
+          echo "acme issuers: $ACME_N, cloudflare dns providers: $DNS_N"
+          if [ "$ACME_N" -lt 1 ] || [ "$DNS_N" -lt "$ACME_N" ]; then
+            echo "Error: not every ACME issuer uses the cloudflare DNS challenge"; echo "$ADAPTED"; exit 1
+          fi
           docker rm -f caddy-dns-test
 
           # 不设置 token：不应生成 acme_dns（保持旧行为）
