@@ -266,7 +266,10 @@ jobs:
           docker rm caddy-byo-test
 
       # ==== 测试通过：将该日期镜像晋升为 latest 标签并推送 ====
+      # 只在 main 上晋升：在功能分支上手动触发（workflow_dispatch）时只推日期标签，
+      # 用来先跑完整测试，不会提前改动生产节点拉取的 latest
       - name: Promote and Push latest Tag
+        if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
         with:
           context: ./Dockerfiles
