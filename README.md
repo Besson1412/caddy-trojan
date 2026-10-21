@@ -172,3 +172,24 @@ Here, connecting to `direct.example.com` uses the default (no-proxy) exit as bef
 to `jp.example.com` or `us.example.com` (with the same `MYPASSWD`) is transparently forwarded
 through `jp-exit.internal:1080` / `us-exit.internal:1080` respectively — the client just dials
 a different hostname to pick a different exit.
+
+## Optional: ACME DNS-01 via Cloudflare (Besson1412 fork)
+
+By default Caddy obtains certificates with the HTTP-01 / TLS-ALPN-01 challenges, which need
+the CA to reach this host on ports 80/443. That breaks for domains proxied through Cloudflare
+(orange cloud) when no certificate exists yet: TLS-ALPN is terminated at Cloudflare's edge, and
+HTTP-01 gets redirected to HTTPS and fails at the origin handshake (Cloudflare error 525) — so
+the very first issuance can never succeed.
+
+Set `CF_DNS_API_TOKEN` to a Cloudflare API token with **Zone:Read + DNS:Edit** on the zone, and
+every domain in the generated Caddyfile switches to the DNS-01 challenge (a temporary
+`_acme-challenge` TXT record written through the Cloudflare API), independent of proxy status
+or port reachability. The image bundles `github.com/caddy-dns/cloudflare` for this. The token is
+referenced only through the `{env.CF_DNS_API_TOKEN}` placeholder and is never written into the
+Caddyfile. Leaving it unset keeps the previous behavior exactly.
+
+```
+docker run --env MYPASSWD=MY_PASSWORD --env MYDOMAIN=direct.example.com \
+  --env MYDOMAINCF=cdn.example.com --env CF_DNS_API_TOKEN=xxxx \
+  -itd --name caddy-trojan --restart always -p 80:80 -p 443:443 caddy-trojan
+```
